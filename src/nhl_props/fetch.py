@@ -90,12 +90,21 @@ def fetch_game(season: int, n: int) -> str:
     return "saved"
 
 
+def _try_game(season: int, n: int) -> str:
+    # One game that keeps failing must not kill the season; a rerun retries it.
+    try:
+        return fetch_game(season, n)
+    except RuntimeError as e:
+        print(e, flush=True)
+        return "error"
+
+
 def fetch_season(season: int) -> None:
     (RAW / str(season)).mkdir(parents=True, exist_ok=True)
     counts: dict[str, int] = {}
     t0 = time.time()
     with ThreadPoolExecutor(WORKERS) as ex:
-        for i, status in enumerate(ex.map(lambda n: fetch_game(season, n), range(1, MAX_GAMES + 1)), 1):
+        for i, status in enumerate(ex.map(lambda n: _try_game(season, n), range(1, MAX_GAMES + 1)), 1):
             counts[status] = counts.get(status, 0) + 1
             if i % 200 == 0:
                 print(f"{season}: {i}/{MAX_GAMES} {counts} {time.time() - t0:.0f}s", flush=True)
