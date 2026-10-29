@@ -86,4 +86,19 @@ net CLV = close mid - cost. Names: Novig "First Last" vs pbp `rosterSpots` (fall
 
 - **PTO (picktheodds.app)**: closing lines of every book for finished games via the page's own GraphQL
   `completedBetMarket` (method + scripts in `../NBAProps/CLAUDE.md`, "PTO CLOSING ODDS VIA THE PAGE'S OWN API").
-  Runs in the user's Chrome. Not tried for NHL yet: would give full 2025-26 multi-book SOG/saves history. Next: Kalshi NHL series (if any) and sportsbook SOG/saves lines.
+  Runs in the user's Chrome.
+- **PTO NHL pull (started 2026-10-29 17:06 ET)**: `scripts/pto_pull.js` (run in a PTO tab via the Chrome tools) +
+  receiver `nhl_props.pto serve <blackouts>` (detached via Start-Process, log `logs/pto_receiver.log`) ->
+  `data/pto/raw/` -> `nhl_props.pto build` -> `data/pto/SOG.parquet`, `SAVES.parquet` (every line, the user's 20 books).
+  - Markets: `PLAYER_PROP_SHOTS_ON_GOAL`, `PLAYER_PROP_SHOTS_SAVED` (also _NO_OT, period variants, BLOCKED_SHOTS, GOALS_AGAINST).
+    Game type `IceHockeyGameType`; game list = `games(league: NHL, request: {afterDateTime, take: 50, orderBy: ASC})`
+    (`cursor` needs both cursor + cursorDateTime). Players: `players(ids, league: NHL)`.
+  - Probe: ~19 skaters / 190 SOG markets per game, 117-153 site ids (most are DFS / sweepstakes apps; we keep 20).
+    History reaches back to at least Oct 2025 (incl. preseason Sep 30). 1,660 finished games Oct 7 2025 -> now.
+  - 🔴 Requiring every webpack module to find `gql` FROZE the tab (12k modules); require only modules whose source
+    has `"Document"` and `fragment` (2 candidates). A frozen tab: close it, open a new one.
+  - 🔴 **The PTO page reloads itself** (seen ~40 min in, 2026-10-29) and the reload kills the pull silently (`window.__pull`
+    undefined). Resume: re-inject with `PTO_PULL.skip` = every `<market>__<gameId>` already in `raw/odds/`. Watch the
+    file count; queries take ~0.3 s, so a healthy pull adds ~40 files a minute.
+  - 🔴 Port 8766 is the NBA snapshot's: both the page and the receiver pause in blackout windows around the NBA
+    early / late / open snapshots (unix-second pairs passed to both). Messages carry `nhl: true`.
