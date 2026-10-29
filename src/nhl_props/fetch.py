@@ -34,7 +34,7 @@ def _get(url: str):
     s = getattr(_local, "s", None)
     if s is None:
         s = _local.s = requests.Session()
-    for attempt in range(6):
+    for attempt in range(9):
         with _lock:
             wait = _last[0] + MIN_GAP - time.monotonic()
             if wait > 0:
@@ -43,12 +43,12 @@ def _get(url: str):
         try:
             r = s.get(url, timeout=30)
         except requests.RequestException:
-            time.sleep(2**attempt)
+            time.sleep(min(2**attempt, 60))
             continue
         if r.status_code == 404:
             return None
         if r.status_code == 429 or r.status_code >= 500:
-            time.sleep(2**attempt)
+            time.sleep(min(2**attempt, 60))
             continue
         r.raise_for_status()
         return r.json()
