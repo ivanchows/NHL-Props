@@ -29,6 +29,54 @@ def _mmss(s: str) -> float:
     return int(m) + int(sec) / 60
 
 
+def _sit(code, home: bool):
+    """Own skaters, opposing skaters for one side, or None on an empty net. situationCode = away goalie, away skaters,
+    home skaters, home goalie."""
+    if not code or len(code) != 4 or code[0] != "1" or code[3] != "1":
+        return None
+    away, hme = int(code[1]), int(code[2])
+    return (hme, away) if home else (away, hme)
+
+
+def pp_windows(pbp, home: bool) -> dict[int, list[tuple[float, float]]]:
+    """period -> [(start, end) in seconds] of this side's man advantage. The state between two plays is the later
+    play's, so a penalty's time runs from the faceoff after it. Expiry is only seen at the next play."""
+    out: dict[int, list[tuple[float, float]]] = {}
+    prev = None
+    for p in pbp["plays"]:
+        per = p["periodDescriptor"]["number"]
+        if p["periodDescriptor"].get("periodType") == "SO":
+            continue
+        t = _mmss(p["timeInPeriod"]) * 60
+        if prev and prev[0] == per and t > prev[1]:
+            st = _sit(p.get("situationCode"), home)
+            if st and st[0] > st[1]:
+                out.setdefault(per, []).append((prev[1], t))
+        prev = (per, t)
+    return out
+
+
+def pp_toi(shifts_path: Path, pbp, team_ids: dict[bool, int]):
+    """player_id -> power-play minutes, from shift charts. Empty when the charts are missing for this game."""
+    if not shifts_path.exists():
+        return None
+    rows = _load(shifts_path)
+    rows = rows["data"] if isinstance(rows, dict) else rows
+    if not rows:
+        return None
+    win = {tid: pp_windows(pbp, home) for home, tid in team_ids.items()}
+    out: Counter = Counter()
+    for r in rows:
+        if r.get("typeCode") != 517 or not r.get("startTime") or not r.get("endTime"):
+            continue
+        a, b = _mmss(r["startTime"]) * 60, _mmss(r["endTime"]) * 60
+        for x, y in win.get(r["teamId"], {}).get(r["period"], ()):
+            lap = min(b, y) - max(a, x)
+            if lap > 0:
+                out[r["playerId"]] += lap / 60
+    return out
+
+
 def parse_game(box_path: Path):
     gid = box_path.name[:10]
     pbp_path = box_path.with_name(f"{gid}_pbp.json.gz")
@@ -46,6 +94,9 @@ def parse_game(box_path: Path):
         pid = d.get("shootingPlayerId") or d.get("scoringPlayerId")
         if pid:
             att.setdefault(pid, Counter())[kind] += 1
+            st = _sit(p.get("situationCode"), d.get("eventOwnerTeamId") == box["homeTeam"]["id"])
+            if st and st[0] > st[1] and kind != "blocked":  # a blocked shot's owner is the blocking team
+                att[pid]["pp_att"] += 1
 
     common = {
         "game_id": int(gid),
@@ -54,6 +105,7 @@ def parse_game(box_path: Path):
         "start_utc": box.get("startTimeUTC"),
     }
     skaters, goalies = [], []
+    pp = pp_toi(box_path.with_name(f"{gid}_shifts.json.gz"), pbp, {True: box["homeTeam"]["id"], False: box["awayTeam"]["id"]})
     for side, opp in (("homeTeam", "awayTeam"), ("awayTeam", "homeTeam")):
         team, opp_team = box[side]["abbrev"], box[opp]["abbrev"]
         stats = box["playerByGameStats"][side]
@@ -77,6 +129,8 @@ def parse_game(box_path: Path):
                     "pbp_sog": a["pbp_sog"] + a["pbp_goals"],
                     "missed": a["missed"],
                     "blocked_att": a["blocked"],
+                    "pp_att": a["pp_att"],
+                    "pp_toi": None if pp is None else pp[s["playerId"]],
                 })
         for g in stats.get("goalies", []):
             goalies.append({

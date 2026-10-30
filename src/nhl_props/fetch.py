@@ -1,6 +1,7 @@
 """Raw NHL game data (api-web.nhle.com + api.nhle.com shift charts), one gzipped JSON per game and feed.
 
 Usage: uv run python -m nhl_props.fetch 2021 2026
+       uv run python -m nhl_props.fetch recent     # the last 4 days only (nightly)
 Season 2021 = 2021-22. Regular season only (game ids <season>02NNNN).
 Writes data/raw/<season>/<gameId>_{pbp,box,shifts}.json.gz. Resumes: a game with all three files is skipped.
 Unfinished games (gameState not OFF/FINAL) are not saved, so rerunning fills them in.
@@ -12,6 +13,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, timedelta
 from pathlib import Path
 
 import requests
@@ -111,7 +113,23 @@ def fetch_season(season: int) -> None:
     print(f"{season} done: {counts} {time.time() - t0:.0f}s", flush=True)
 
 
+def fetch_recent(days: int = 4) -> None:
+    """Only the games of the last few days, from the schedule: a full season pass probes all 1,312 ids."""
+    today = date.today()
+    ids = []
+    for k in range(days + 1):
+        d = (today - timedelta(days=k)).isoformat()
+        for wk in requests.get(f'https://api-web.nhle.com/v1/schedule/{d}', timeout=30).json().get('gameWeek', []):
+            if wk['date'] == d:
+                ids += [g['id'] for g in wk['games'] if g.get('gameType') == 2]
+    with ThreadPoolExecutor(WORKERS) as ex:
+        st = list(ex.map(lambda g: _try_game(g // 1000000, g % 10000), ids))
+    print(f'recent: {len(ids)} games, ' + str({x: st.count(x) for x in set(st)}), flush=True)
+
+
 def main(argv: list[str]) -> None:
+    if argv[0] == 'recent':
+        return fetch_recent()
     first, last = int(argv[0]), int(argv[1] if len(argv) > 1 else argv[0])
     for season in range(first, last + 1):
         fetch_season(season)

@@ -14,7 +14,8 @@ price what you can get, judge by CLV, only info known at quote time).
 ## Setup
 - uv project `nhl-props`, Python 3.12 (same interpreter flag as nba-props / mlb-props):
   `uv run --python C:\Users\ivan\AppData\Roaming\uv\python\cpython-3.12.13-windows-x86_64-none\python.exe ...`
-- `data/` and `logs/` are gitignored.
+  Since 2026-10-30 `.venv` is on 3.12.15 and plain `uv run` works, scheduled tasks included. uv.lock pins the packages.
+- `data/` and `logs/` are gitignored, so `data/v2_frozen.joblib` is not in git: rebuild it with `nhl_props.v2` (seeded, same model).
 
 ## Data
 - `nhl_props.fetch 2021 2026` (season 2021 = 2021-22): regular season, game ids `<season>02NNNN`, 1..1312.
@@ -84,12 +85,89 @@ net CLV = close mid - cost. Names: Novig "First Last" vs pbp `rosterSpots` (fall
 - CLOSE: market clearly better (0.6797 vs model 0.6887), ROI -2% to +1%: no edge. Same pattern as MLB: the open is soft.
 - One month, many cuts, raw frozen baseline: promising, not proven.
 
+## Baseline vs PTO closes (2026-10-30, `nhl_props.pto_backtest`, log `logs/pto_backtest.log`)
+Regular season 2025-26 + 2026-27 so far, frozen baseline. Main line per player-game (most two-sided books, 3+): 19,884 lines,
+1,391 games, 9 books, hold 6.9%. Consensus = median no-vig. Bets at the best price, -250..+250, plus odds risk 1u, minus odds
+risk to win 1u, ROI = net / risked, SE clustered by game. PTO `isWinner` is always null: settled on the box score.
+- Log loss: model 0.6863, consensus 0.6828 (50/50 0.6829). The close wins at every line and in every month except Apr 2026
+  and the Sept 2026 handful. Over rate 0.501, consensus 0.507, model 0.484 (model leans low on players with props).
+- Model bets, edge 3-12% at the best price: 7,078, 3,609-3,469, +45.0u, **+0.5% ± 1.2** (2025-26 +0.3%, 2026-27 +1.3%;
+  unders +1.3% ± 1.3, overs -2.1% ± 2.5). Edge does not scale: 3-6% +0.7%, 6-12% +0.3%, 12%+ +5.1% ± 4.4; 0-3% -2.6%.
+- No-model controls at the best price: every under -2.3% ± 0.7, every over -3.6% ± 0.7, best price beats consensus -0.6%.
+- One book only (edge 3-12%): all lose. theScore -0.3%, bet365 -1.2%, NoVig -1.5%, FD -3.3%, DK -3.6%, MGM -4.5%, Caesars -5.8%.
+- Walk-forward blend (fit before Feb 2026, test after, 8,419 lines): logit weights model 0.17, consensus 0.91. Log loss
+  0.6849 vs consensus-only control 0.6855: **-0.00063 ± 0.00023**, the model adds a little the close lacks, more than the NBA
+  model did (-0.0003 ± 0.0003). Blend bets are few: 3-6% edge 218, +7.3% ± 6.8 (control 344, -6.1% ± 5.5).
+- Verdict: break-even at the best price, a loss at any one book. Not bettable at the close as is. The small blend signal + the
+  soft Novig open are the leads; the close itself is efficient.
+
+## SOG v2 (2026-10-30, `nhl_props.v2`, writes `data/v2_pred.parquet`; rerun after every `nhl_props.data`)
+Boosted Poisson correction on the frozen baseline (fit y / mu0 weighted by mu0 = offset log mu0). Settings picked on 2022-23 ->
+2024, fit 2022-24, scored 2025 + 2026 with no choice made on them. NB r stays 17.3. `data.py` now adds `pp_att` and `pp_toi`
+(pbp situationCode windows x shift charts; 1.8% of rows have no charts).
+- Features: attempt rates (30/120/480 d), shot accuracy, short-window SOG rate, PP minutes + PP shot rate, short-window TOI,
+  rest, opponent SOG allowed (by F/D and overall), team shot tendency, decayed goal difference, home, back-to-backs, and the
+  LINEUP group (who dressed: team TOI sum, TOI share, PP share). `mu_nolineup` drops that group.
+- 🔴 LINEUP is fair against a close, NOT an open: use `mu_nolineup` for anything priced before lineups are out.
+- 2024 validation, ablation: opp and attempts and form matter most; PP group adds nothing beyond the rest (log-lik unchanged).
+- Held out: 2025-26 log-lik -1.5360 -> -1.5308, MAE 1.015 -> 1.011; 2026-27 -1.5237 -> -1.5202, MAE 0.996 -> 0.997.
+- PTO closes (`pto_backtest v2_pred`, same lines as the baseline test): log loss v2 0.6833, consensus 0.6828, **50/50 0.6820**
+  (baseline was 0.6863, no gain from blending). Mean P(over) 0.500 vs actual 0.501: the low lean is gone.
+  Best price: edge 3-12% 5,307 bets +1.1% ± 1.4; 3-6% -0.3% ± 1.6; 6-12% +4.1% ± 2.4; 12%+ +16.6% ± 6.5 (206).
+  **Edge 6%+ (the MLB rule, set before this test): 1,838 bets, 970-868, +117.2u, +5.5% ± 2.3.**
+- Checks (`scripts/v2_checks.py`, logs/v2_checks.log): no-lineup 6%+ +7.2% ± 2.2 (2,075), so no lineup leak. Mainstream 8 books only
+  (DK FD MGM CZR b365 Fanatics theScore BetRivers) 6%+ +7.4% ± 2.5 (1,437). Placebo (shuffle model-vs-consensus gaps, 200 runs):
+  mean -1.4%, max +3.1%, real +5.5%: 0/200 reach it. 2025-26 +3.7% ± 3.0, 2026-27 +8.1% ± 3.4; unders +6.0% ± 2.7, overs +4.4% ± 4.4;
+  line 1.5 +8.1%, 2.5 +2.6%. ⚠️ Not stable by month: Dec -14.8%, Feb -20.1%, Mar +16.8%, Apr +17.7%, Oct 2026 +7.3%. ⚠️ Non-monotone in
+  the raw model-consensus gap (6-8% -2.5%, 8%+ +5.3%).
+- Walk-forward blend (fit before Feb 2026): weights model 0.47, consensus 0.62; log loss -0.00111 ± 0.00057 vs consensus-only control.
+  Blend bets: 3-6% +7.9% ± 3.6 (643), 6%+ +11.4% ± 8.0 (137).
+- Novig (`novig_backtest v2_pred mu_nolineup`, 2026-27 only): OPEN edge >= 6%, best line per player-game: 472 bets, +11.7% ± 4.4, net CLV
+  +1.18c ± 0.28; >= 4% +10.0% ± 3.6, CLV +0.85c ± 0.21. Close 6%+ +6.6% ± 5.1. Open log loss 0.6798 vs market 0.6789, 50/50 0.6762.
+- Part of 2026-27's edge is the books lagging falling shot volume (Oct 2026 over rate 0.471, consensus 0.489, v2 0.466). May fade.
+- Verdict: first real signal, and it passes every check so far, but it is ~2.4 SE on history and the months swing. Paper-track before staking.
+- Audit (2026-10-30, on the actual bets):
+  - Clean: 1 duplicate (PTO lists Mike / Michael Benning twice, fixed in `main_lines`, now 1,837 bets, +116.2u, +5.5%). No wrong-game matches
+    (PTO's LA NJ SJ TB UTAH = LAK NJD SJS TBL UTA). No leakage: scrambling every outcome from 2026-01-15 on moved no feature on or before that
+    date (215,798 rows, 24 of 32 features moved after it). Baseline params tuned on 2022-24 only.
+  - 🔴 The ROI is mostly line shopping: 6%+ is +5.5% at the best price, +3.0% at the 2nd best, 0.0% at the median book. The signal itself: bets won
+    52.8% vs consensus 49.3% (+3.5 pts ± 1.1). No-lineup 54.0% vs 49.5%.
+  - Weak by period: first half (to 2026-01-16) 6%+ +1.8% ± 4.0, second half +7.3% ± 2.8. Bootstrap 95% by date +0.8% to +10.0%.
+  - One-way lean: 71% unders, 21% overs share of bets in the second half, so a market catch-up on shot volume hits most bets at once.
+  - Novig at the paper-test rules (odds cap, one bet per player-game): 462 bets, +60.6u, +10.7% ± 4.5, 29 days. Prices are last trades, and 239 of the
+    462 had only that side traded, so they may not have been available. Not a fair comparison with the live quotes.
+- Not done: tonight's line combos and confirmed PP units (no pregame source yet; every lineup feature is who dressed + past usage).
+
+## Paper test of v2 (`nhl_props.live`, started 2026-10-30, no real bets, nothing posted)
+🔴 Rule fixed before the first decision. Do NOT change it or refit mid-test; a new model = a new test.
+- Model: `data/v2_frozen.joblib` (no-lineup v2, r 17.3). `live check` proves it reproduces `v2_pred.parquet` (max diff 0.000000).
+  Rerunning `nhl_props.v2` refits to the same model (seeded) but would overwrite the file: don't.
+- Price: Novig public book, no key, no Chrome (`/v3/public/catalog/{events,markets}`). A book side's bid = the OTHER side's offer:
+  buy over = 1 - best under bid; depth $ = that bid's qty / 100. Pre-game takers pay no fee.
+- One side per player-game (largest edge on any line), odds -250..+250, depth >= $25. **tier bet = edge >= 6%** (the test);
+  tier watch = 3-6% (logged only). Plus odds risk 1u, minus odds risk to win 1u, ROI = net / risked.
+- Two stages, judged apart: early = first run with 10+ lines on game day from 09:00 ET; late = under 50 min to puck drop.
+- Scratch = void. Settles on the box score. Close = last logged quote before the start (~0-30 min out).
+- Files: `data/live/bets.csv`, `decided.csv` (one row per game x stage, so no double logging), `quotes/<date>.parquet` (every line,
+  every run), `proj/<date>.parquet` (first run of the day builds it, ~1 min), `results.csv`, `report.md`, `logs/`.
+- Task Scheduler `\NHL Props\` (user OK 2026-10-30, ends 2027-04-20): `decide` every 30 min 09:00-23:30, `nightly` 05:00 =
+  `fetch recent` + `data` + `live settle`. Only while the user is logged on and the PC is awake; StartWhenAvailable catches up.
+- 🔴 `fetch 2026` probes all 1,312 ids, ~14 min, mostly throttled "unplayed": nightly uses `fetch recent` (schedule, last 4 days).
+- 🔴 Rosters are the current roster, so a player traded today projects with his new team and the same history.
+- Not tracked live: best price across books (PTO needs Chrome). Compare later with a PTO close pull; the backtest's +5.5% is best-price.
+- Judge at ~500 bets per stage: net CLV first, ROI second. Regular season only.
+
 - **PTO (picktheodds.app)**: closing lines of every book for finished games via the page's own GraphQL
   `completedBetMarket` (method + scripts in `../NBAProps/CLAUDE.md`, "PTO CLOSING ODDS VIA THE PAGE'S OWN API").
   Runs in the user's Chrome.
 - **PTO NHL pull (started 2026-10-29 17:06 ET)**: `scripts/pto_pull.js` (run in a PTO tab via the Chrome tools) +
   receiver `nhl_props.pto serve <blackouts>` (detached via Start-Process, log `logs/pto_receiver.log`) ->
   `data/pto/raw/` -> `nhl_props.pto build` -> `data/pto/SOG.parquet`, `SAVES.parquet` (every line, the user's 20 books).
+  - **DONE 2026-10-30 00:46** (1,668 finished games Oct 8 2025 -> Oct 29 2026, incl. playoffs + preseason; 0 missing):
+    SOG 1,509 games / 26,270 player-games / 1.19M prices (0.9% unnamed); SAVES 1,369 games / 2,817 goalie-games / 102k.
+    Gaps are PTO's, not the pull's: Mar 2026 only 181/247 games with SOG (108 saves), Sep 2026 preseason 7/72.
+    SOG books: BET_365, DK, PROP_BUILDER, HARD_ROCK_IN, ONYX, FANATICS, FD, FLIFF, NO_VIG, CAESARS, MGM, ... **no Pinnacle,
+    no BetOnline**; Kalshi only on saves (370 prices). SOG lines 0.5-5.5+ (alt ladders); saves mostly 21.5-26.5.
   - Markets: `PLAYER_PROP_SHOTS_ON_GOAL`, `PLAYER_PROP_SHOTS_SAVED` (also _NO_OT, period variants, BLOCKED_SHOTS, GOALS_AGAINST).
     Game type `IceHockeyGameType`; game list = `games(league: NHL, request: {afterDateTime, take: 50, orderBy: ASC})`
     (`cursor` needs both cursor + cursorDateTime). Players: `players(ids, league: NHL)`.

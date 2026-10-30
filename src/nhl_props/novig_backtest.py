@@ -5,12 +5,13 @@ under 60 min old. Snapshots: open (first trade + 1 h) and close (last trades bef
 Fee 0 (Novig pre-game takers pay none). Net CLV = close mid - cost, per bet (the primary metric).
 Model rows exist only for skaters who played, so scratched players (Novig voids them) drop out of both sides.
 
-Usage: uv run python -m nhl_props.novig_backtest
+Usage: uv run python -m nhl_props.novig_backtest [pred table] [mu column]
 """
 
 import glob
 import gzip
 import json
+import sys
 import unicodedata
 from pathlib import Path
 
@@ -66,12 +67,13 @@ def snapshot(t: pd.DataFrame, when: str) -> pd.DataFrame:
     return meta.join(piv, how="inner").reset_index()
 
 
-def model_rows(kind: str) -> pd.DataFrame:
+def model_rows(kind: str, pred: str = "baseline_pred", col: str = "mu") -> pd.DataFrame:
     """One row per player-game: name keys, outcome y, and a function-ready (mu, r)."""
     names = full_names()
     if kind == "SHOTS_ON_GOAL":
-        p = pd.read_parquet(DATA / "baseline_pred.parquet")
+        p = pd.read_parquet(DATA / f"{pred}.parquet")
         p = p[p.season == 2026].rename(columns={"sog": "y"})
+        p["mu"] = p[col]
     else:
         p = pd.read_parquet(DATA / "saves_pred.parquet")
         p = p[p.season == 2026].rename(columns={"saves": "y"})
@@ -132,7 +134,7 @@ def evaluate(m: pd.DataFrame, close: pd.DataFrame | None, when: str) -> None:
             print(txt)
 
 
-def main(kinds=("SHOTS_ON_GOAL", "SAVES")) -> None:
+def main(pred: str = "baseline_pred", col: str = "mu", kinds=("SHOTS_ON_GOAL", "SAVES")) -> None:
     for kind in kinds:
         if kind == "SAVES" and not (DATA / "saves_pred.parquet").exists():
             print("\nSAVES: no saves model yet (data/saves_pred.parquet), skipped")
@@ -140,7 +142,7 @@ def main(kinds=("SHOTS_ON_GOAL", "SAVES")) -> None:
         t = trades(kind)
         print(f"\n===== {kind}: {len(t):,} pre-game taker trades, {t.marketId.nunique():,} lines, "
               f"{t.ts.min():%Y-%m-%d} -> {t.ts.max():%Y-%m-%d}")
-        p = model_rows(kind)
+        p = model_rows(kind, pred, col)
         close = snapshot(t, "close")
         for when in ("open", "close"):
             s = snapshot(t, when)
@@ -151,4 +153,4 @@ def main(kinds=("SHOTS_ON_GOAL", "SAVES")) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(*sys.argv[1:])

@@ -28,8 +28,11 @@ TUNE = (2022, 2023, 2024)
 TEST = (2025, 2026)
 
 
-def load() -> pd.DataFrame:
+def load(extra: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Every skater-game; extra = rows for games not played yet (live projections)."""
     s = pd.read_parquet(DATA / "skater_games.parquet")
+    if extra is not None:
+        s = pd.concat([s, extra], ignore_index=True)
     s["grp"] = np.where(s.pos == "D", "D", "F")
     s["date"] = pd.to_datetime(s.game_date)
     s["t"] = (s.date - s.date.min()).dt.days.astype(float)
