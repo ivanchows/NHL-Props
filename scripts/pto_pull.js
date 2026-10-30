@@ -2,6 +2,10 @@
 // Port of ../NBAProps/pto-scanner/pull_resume_combos.js. Uses the PAGE'S Apollo client (it signs requests).
 // Settings in window.PTO_PULL before running: {from, to (unix s), blackout: [[a, b], ...] unix s, skip: {"<market>__<gameId>": 1}}.
 // Pauses (sends nothing) inside blackout windows: the NBA snapshot owns port 8766 then. Stop: window.__pull.stop = true.
+// 🔴 Pace = a MINIMUM gap between requests (PTO_PULL.pace, default 2 s), slept only if the request came back sooner:
+// a fixed sleep in a background tab is stretched by timer throttling (2.5 s became ~30 s).
+// 🔴 Why pace at all: unpaced (~46/min) hit HTTP 429 after ~1,000 requests and the page's link then
+// blocks every request as "Network is still offline". A background tab stretches the pace further (timer throttling).
 // 🔴 Finding gql: only require webpack modules whose source mentions "Document" (requiring all 12k froze the tab).
 (() => {
   const CFG = window.PTO_PULL || {};
@@ -10,7 +14,7 @@
     "PROP_BUILDER", "KALSHI", "HARD_ROCK_IN"]);
   const MK = CFG.markets || ["PLAYER_PROP_SHOTS_ON_GOAL", "PLAYER_PROP_SHOTS_SAVED"];
   const FROM = CFG.from, TO = CFG.to || Math.floor(Date.now() / 1000), BL = CFG.blackout || [], SKIP = CFG.skip || {};
-  const S = (window.__pull = { named: new Set(), pending: new Set(), errors: [], streak: 0, stop: false, phase: "find", done: 0, total: 0, games: 0 });
+  const S = (window.__pull = { named: new Set(), pending: new Set(), errors: [], streak: 0, stop: false, phase: "find", done: 0, total: 0, games: 0, t: 0 });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const blocked = () => { const t = Date.now() / 1000; return BL.some(([a, b]) => a <= t && t < b); };
   const post = (m) => window.postMessage({ ptohist: { raw: true, nhl: true, ...m } }, "*");
@@ -77,9 +81,9 @@
         await waitOpen();
         post({ kind: "odds", market: m, game_id: g.id, rows, note: `game ${gi + 1}/${games.length}` });
         S.done++;
-        await sleep(1200);
+        const gap = (CFG.pace ?? 2000) - (performance.now() - S.t); if (gap > 0) await sleep(gap); S.t = performance.now();
       }
-      if (S.pending.size >= 40 || gi === games.length - 1) { await names(); await sleep(1200); }
+      if (S.pending.size >= 40 || gi === games.length - 1) await names();
     }
     post({ kind: "done" }); S.phase = "finished";
   })().catch((e) => { S.phase = "failed: " + String(e).slice(0, 200); });

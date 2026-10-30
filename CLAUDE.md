@@ -99,6 +99,12 @@ net CLV = close mid - cost. Names: Novig "First Last" vs pbp `rosterSpots` (fall
     has `"Document"` and `fragment` (2 candidates). A frozen tab: close it, open a new one.
   - 🔴 **The PTO page reloads itself** (seen ~40 min in, 2026-10-29) and the reload kills the pull silently (`window.__pull`
     undefined). Resume: re-inject with `PTO_PULL.skip` = every `<market>__<gameId>` already in `raw/odds/`. Watch the
-    file count; queries take ~0.3 s, so a healthy pull adds ~40 files a minute.
+    file count.
+  - 🔴 **Chrome throttles the tab once it loses focus**: ~2 game-markets/s while focused, ~4-20/min in the background
+    (a 1.2 s `sleep` became 20-30 s).
+  - 🔴 **Rate limit**: unpaced (~46/min) got HTTP 429 after ~1,000 requests. The page's link then refuses everything with
+    "Network is still offline. Request blocked." (its health probe treats 429 as offline). Stop, wait, reload the tab,
+    resume with `PTO_PULL.pace` (default 2.5 s). A silent AudioContext keep-alive does not work:
+    it stays suspended without a click (and awaiting `resume()` hangs the eval).
   - 🔴 Port 8766 is the NBA snapshot's: both the page and the receiver pause in blackout windows around the NBA
     early / late / open snapshots (unix-second pairs passed to both). Messages carry `nhl: true`.
