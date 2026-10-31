@@ -136,10 +136,37 @@ Boosted Poisson correction on the frozen baseline (fit y / mu0 weighted by mu0 =
   - One-way lean: 71% unders, 21% overs share of bets in the second half, so a market catch-up on shot volume hits most bets at once.
   - Novig at the paper-test rules (odds cap, one bet per player-game): 462 bets, +60.6u, +10.7% ± 4.5, 29 days. Prices are last trades, and 239 of the
     462 had only that side traded, so they may not have been available. Not a fair comparison with the live quotes.
-- Not done: tonight's line combos and confirmed PP units (no pregame source yet; every lineup feature is who dressed + past usage).
+- Not done: confirmed PP units as a model feature (DailyFaceoff has them live, no history).
 
-## Paper test of v2 (`nhl_props.live`, started 2026-10-30, no real bets, nothing posted)
+## SOG v3 (2026-10-30, `nhl_props.v3`, writes `data/v3_pred.parquet`, `data/v3_frozen.joblib`; checks `scripts/v3_checks.py`, logs/v3_checks.log)
+v2 + TOI model (`toi_m`, gradient boosting on toi_hat residual, sees absences). No NHL injury history exists: absences = who dressed, so fair at a CLOSE only.
+- TOI MAE 1.927 -> 1.814 (2025), 1.976 -> 1.870 (2026). With a same-position teammate newly out, bias +0.26 -> -0.01 (2025).
+- Chosen on 2024: `+toi model`. The raw absence features added nothing to SOG once tested alone (ll -1.5408 vs v2 -1.5408); they work through TOI.
+  SOG: 2025 ll -1.5308 -> -1.5306, 2026 -1.5191 -> -1.5184.
+- PTO closes, same lines (data through 2026-10-29): 6%+ v3 1,820 bets +141.8u +6.8% ± 2.2, 2nd best +4.2%, median book +1.3%; v2 1,849 +123.8u +5.8%, +3.2%, +0.2%.
+  Log loss v3 .6831, v2 .6833, consensus .6828, 50/50 .6819. First half +3.8% ± 3.3, second +9.6% ± 3.1.
+- 🔴 Injuries are not where the money is at the close: teammate newly out +2.0% ± 3.3, no new absence +10.9% ± 3.1 (same as NFL inactives: priced by then).
+  Before the market moves is untested and can't be backtested.
+- Leak check: scrambling outcomes from 2026-01-15 moved nothing on or before it (215,798 rows, every TOI model input).
+
+## Paper test of v3 (`nhl_props.live_v3`, started 2026-10-30 6:19 PM, no real bets)
+🔴 Same rule as v2's test, frozen `data/v3_frozen.joblib`. Do NOT rerun `nhl_props.v3`. Never pool with v2. `\NHL Props\decide3` every 30 min; `nightly` settles it too.
+- Lineup = DailyFaceoff `ev` f1-4 + d1-3, minus ESPN Out / IR / suspended. Under 16 matched: last game's lineup minus that list. Projections rebuild only when a lineup changes.
+- `data/live_v3/news/{espn,dfo}_<date>.parquet` keeps every run's raw rows: the only NHL injury history there will be. Includes PP units, game-time decisions.
+- Owns #shots-on-goal. Oct 30 is partial: game 2026020214 had started, 2026020215 got early and late in one run.
+
+## Paper test of v3 at PTO's best price (`nhl_props.pto_live`, built 2026-10-30, no real bets)
+🔴 Same frozen v3, separate test: never pool with Novig. `\NHL Props\pto` at :05 and :35; `nightly` settles it. Posts picks with the book named.
+- Reads PTO with the NBA extension (v0.3.1 adds the NHL shots screen; needs Reload on chrome://extensions after any change). 🔴 PTO strips `#ptoscan` before document_idle on the NHL screen: `start.js` reads it at document_start. Chrome opens only when a stage is due; the extension closes its tab.
+- 🔴 Port 8766 is shared with NBAProps-PTO (10-minute slots), so this runs on the 5s with a 3.5 min limit and skips if busy. Needs Chrome open and logged in to PTO.
+- Started games have no "AAA @ BBB · Shots on Goal" label on the screen, so an NHL scan scrolls past them until the first labelled row.
+- Sportsbooks show no size, so the $25 floor only applies to exchanges. Saved: `data/live_pto/raw/`, `lines/` (every book's price, every scan).
+- Task on since 2026-10-30. A real scan ran and posted back (42 s, 20 books) but with 0 rows, every game had started: the first real prices are the next slate.
+
+## Paper test of v2 (`nhl_props.live`, started 2026-10-30, no real bets)
 🔴 Rule fixed before the first decision. Do NOT change it or refit mid-test; a new model = a new test.
+- Discord: #shots-on-goal (1565469010248867971) through the EV bot's token (`../NBAProps/ev-bot/config.toml`, never print it), no webhook.
+  Posting belongs to v3 now (`live.POST` off): v2 logs and grades without posting.
 - Model: `data/v2_frozen.joblib` (no-lineup v2, r 17.3). `live check` proves it reproduces `v2_pred.parquet` (max diff 0.000000).
   Rerunning `nhl_props.v2` refits to the same model (seeded) but would overwrite the file: don't.
 - Price: Novig public book, no key, no Chrome (`/v3/public/catalog/{events,markets}`). A book side's bid = the OTHER side's offer:

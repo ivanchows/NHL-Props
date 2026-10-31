@@ -4,3 +4,5 @@ cd /d C:\Users\ivan\NHLProps
 "C:\Users\ivan\.local\bin\uv.exe" run python -m nhl_props.fetch recent >> data\live\logs\nightly.log 2>&1
 "C:\Users\ivan\.local\bin\uv.exe" run python -m nhl_props.data >> data\live\logs\nightly.log 2>&1
 "C:\Users\ivan\.local\bin\uv.exe" run python -m nhl_props.live settle >> data\live\logs\nightly.log 2>&1
+"C:\Users\ivan\.local\bin\uv.exe" run python -m nhl_props.live_v3 settle >> data\live\logs\nightly.log 2>&1
+"C:\Users\ivan\.local\bin\uv.exe" run python -m nhl_props.pto_live settle >> data\live\logs\nightly.log 2>&1

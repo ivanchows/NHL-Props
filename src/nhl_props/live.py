@@ -1,4 +1,6 @@
-"""Forward paper test of SOG v2 (no-lineup model) at Novig's live prices. No real bets, nothing is posted anywhere.
+"""Forward paper test of SOG v2 (no-lineup model) at Novig's live prices. No real bets.
+v3 (nhl_props.live_v3) owns #shots-on-goal: with POST on, tier bet picks and nightly results go there through the EV bot
+(token in ../NBAProps/ev-bot/config.toml). v2 keeps logging without posting.
 
     uv run python -m nhl_props.live decide [--dry-run]   # every 30 min: log quotes, decide each game at two stages
     uv run python -m nhl_props.live settle               # after nhl_props.fetch + data: grade bets, write the report
@@ -14,6 +16,8 @@ A player who does not dress = void. Settles on the box score. Closing price = la
 import json
 import re
 import sys
+import tomllib
+from pathlib import Path
 
 import joblib
 import numpy as np
@@ -27,10 +31,15 @@ from nhl_props.pto_backtest import american, payoff
 from nhl_props.v2 import features
 
 LIVE = DATA / "live"
+POST, TITLE = False, "v2"  # live_v3 flips these
+SCALE = ("For scale: Novig open at these rules +10.7% ± 4.5 (462 bets, one month, last-trade prices), PTO close 6%+ +5.5% best price, "
+         "+3.0% 2nd best, 0% median book.")
 NOVIG = "https://api.novig.com/v3/public/catalog"
 SCHEDULE = "https://api-web.nhle.com/v1/schedule/{date}"
 ROSTER = "https://api-web.nhle.com/v1/roster/{team}/current"
 ET = "America/New_York"
+BOT_CONFIG = Path(r"C:\Users\ivan\NBAProps\ev-bot\config.toml")
+CHANNEL = "1565469010248867971"  # #shots-on-goal
 MIN_EDGE, WATCH_EDGE, MIN_DEPTH, MIN_ODDS, MAX_ODDS, LATE_MIN = 0.06, 0.03, 25, -250, 250, 50
 BET_COLS = ["ts", "date", "game_id", "start_utc", "stage", "tier", "player_id", "name", "team", "line", "side", "price", "odds",
             "p_model", "mu", "edge", "depth", "market_id"]
@@ -50,6 +59,59 @@ def _paged(path, **params):
         after = j.get("next")
         if not after:
             return out
+
+
+def bot_token() -> str | None:
+    """The EV bot's token, read from disk and never printed."""
+    try:
+        return tomllib.loads(BOT_CONFIG.read_text(encoding="utf-8"))["discord"]["bot_token"] or None
+    except (OSError, KeyError, tomllib.TOMLDecodeError):
+        return None
+
+
+def post(lines: list[str]) -> bool:
+    """Send lines to #shots-on-goal, 30 to a message (2,000 character limit). Log only the error's type."""
+    token = bot_token()
+    if not token:
+        return False
+    try:
+        for i in range(0, len(lines), 30):
+            r = requests.post(f"https://discord.com/api/v10/channels/{CHANNEL}/messages", headers={"Authorization": f"Bot {token}"},
+                              json={"content": "\n".join(lines[i:i + 30]), "allowed_mentions": {"parse": []}}, timeout=20)
+            r.raise_for_status()
+    except requests.RequestException as e:
+        print(f"discord post failed: {type(e).__name__} {getattr(e.response, 'status_code', '')}", flush=True)
+        return False
+    return True
+
+
+def post_bets(b: pd.DataFrame, old: pd.DataFrame | None) -> None:
+    """Tier bet picks, each once: a late pick the early run already posted stays quiet."""
+    keys = ["game_id", "player_id", "side", "line"]
+    b = b[b.tier == "bet"].drop_duplicates(keys)
+    if old is not None:
+        b = b[~b.set_index(keys).index.isin(old[old.tier == "bet"].set_index(keys).index)]
+    if b.empty:
+        return
+    post(["**NHL shots on goal** (paper, Novig)"] + [f"{x.name} ({x.team}) {x.side} {x.line:g} {x.odds:+d}, edge {x.edge:+.1%}" for x in b.itertuples()])
+
+
+def post_results(b: pd.DataFrame) -> None:
+    """One post per finished date, once. Totals cover every graded tier bet."""
+    f = LIVE / "posted_results.txt"
+    posted = set(f.read_text(encoding="utf-8").split()) if f.exists() else set()
+    x = b[b.tier == "bet"]
+    d = x[x.status == "done"]
+    open_dates = set(x[x.status == "pending"].date)
+    line = lambda y, lab: f"{lab}: {y.won.sum()}-{(~y.won).sum()}, {y.net.sum():+.1f}u, ROI {y.net.sum() / y.risk.sum():+.1%}"
+    for date, y in d.groupby("date"):
+        if date in posted or date in open_dates:
+            continue
+        L = [f"**NHL shots on goal results, {date}** (paper, {TITLE})"] + [line(z, stage.capitalize()) for stage, z in y.groupby("stage")]
+        L += [line(z, f"Total {stage}") for stage, z in d.groupby("stage")]
+        if post(L):
+            with open(f, "a", encoding="utf-8") as h:
+                h.write(date + "\n")
 
 
 def slate(date: str) -> pd.DataFrame:
@@ -195,7 +257,11 @@ def decide(dry: bool = False) -> None:
         pd.DataFrame(marks).to_csv(df, mode="a", header=not df.exists(), index=False)
     if new:
         f = base / "bets.csv"
-        pd.concat(new, ignore_index=True)[BET_COLS].to_csv(f, mode="a", header=not f.exists(), index=False)
+        old = pd.read_csv(f) if f.exists() else None
+        out = pd.concat(new, ignore_index=True)[BET_COLS]
+        out.to_csv(f, mode="a", header=not f.exists(), index=False)
+        if POST and not dry:
+            post_bets(out, old)
     print(f"{now:%H:%M} {len(games)} games, {len(q)} lines, stages {[(m['game_id'], m['stage'], m['picks']) for m in marks]}", flush=True)
 
 
@@ -222,9 +288,8 @@ def settle() -> None:
     b.to_csv(LIVE / "results.csv", index=False)
 
     d = b[b.status == "done"]
-    L = [f"# NHL SOG v2 paper test, through {d.date.max() if len(d) else '-'}", "",
-         "Paper only, Novig prices. tier bet = edge 6%+, watch = 3-6%. Stages are separate tests. For scale: Novig open at these "
-         "rules +10.7% ± 4.5 (462 bets, one month, last-trade prices), PTO close 6%+ +5.5% best price, +3.0% 2nd best, 0% median book.", "",
+    L = [f"# NHL SOG {TITLE} paper test, through {d.date.max() if len(d) else '-'}", "",
+         f"Paper only, Novig prices. tier bet = edge 6%+, watch = 3-6%. Stages are separate tests. {SCALE}", "",
          "| Tier | Stage | Bets | W-L | Units | ROI | ± | Avg got | Avg close |", "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
     for (tier, stage), x in d.groupby(["tier", "stage"]):
         g = x.groupby("game_id").agg(net=("net", "sum"), risk=("risk", "sum"))
@@ -235,6 +300,8 @@ def settle() -> None:
     L += ["", f"Pending {(b.status == 'pending').sum()}, void {(b.status == 'void').sum()}."]
     (LIVE / "report.md").write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
+    if POST:
+        post_results(b)
 
 
 def check() -> None:
